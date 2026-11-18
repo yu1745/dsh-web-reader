@@ -1,4 +1,3 @@
-import { providerAuth } from "./auth.js";
 import { createClassifierRegistry } from "./classifiers.js";
 
 export function normalizeSchema(value: any): any {
@@ -33,7 +32,6 @@ export function createBridge(ctx: any, options: any = {}) {
             signal: exec.signal,
             modelRegistry: {
               ...createClassifierRegistry(ctx, { ...options.classifier, sessionId: exec.agent?.id ?? exec.agent?.session?.id }),
-              getProviderAuth: (provider: string) => providerAuth(ctx, provider),
             },
             ui: { notify: (message: string) => ctx.logger?.info(message) },
           });

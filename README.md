@@ -9,7 +9,7 @@ Requires DSH 0.2.2-rc.3 or a compatible 0.2.x release, Node.js 22 or newer, and 
 ## Migrate from DSH Extensions
 
 1. Disable the legacy `yu-web-reader` row (`@yu1745/dsh-extensions/web-reader`) before enabling the standalone bundle. If you still use other DSH Extensions plugins, keep their bundle installed. Both reader implementations register the `web_reader` tool name.
-2. Add or enable `@yu1745/dsh-web-reader`. Its row ID is `yu-standalone-web-reader`. If you set `classifier.provider` or `classifier.model` on the old row, copy those values to the new row. Existing classifier settings in `$DSH_HOME/extensions/yu1745/settings.json` and DSH credentials are reused. Explicit row settings take precedence.
+2. Add or enable `@yu1745/dsh-web-reader`. Its row ID is `yu-standalone-web-reader`. Copy `classifier.model` if you used a custom TypeSafe Jev model. For authentication, the bundle uses the existing DSH TypeSafe API key or `TYPESAFE_API_KEY`. Legacy TypeSafe model settings in `$DSH_HOME/extensions/yu1745/settings.json` are reused when the row omits a model. Version 1.0.1 supports TypeSafe Jev as its only remote classifier and falls back to local readiness checks when the classifier is unavailable.
 3. Open a new session and ask to run `web_reader` on an ordinary HTTPS page. Recheck tool visibility in any preset with custom restrictions. The standalone bundle registers at host level, so it can be inherited by presets without the old `yu-web-tools` glue. The built-in search and fetch configuration stays under the host or legacy bundle's control.
 4. To revert, disable the standalone bundle, then re-enable the legacy `yu-web-reader` row.
 

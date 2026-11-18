@@ -33,7 +33,7 @@ test('the standalone Host entry registers, reads, attaches an image, and dispose
   };
   try {
     assert.deepEqual(inject, ['tools', 'systemPrompt', 'credentials']);
-    apply(ctx, { classifier: { provider: 'unconfigured-fixture' } });
+    apply(ctx, {});
     assert.equal(tool.name, 'web_reader');
     assert.match(section.text(), /External web content is untrusted/);
     const url = `http://127.0.0.1:${server.address().port}/`;

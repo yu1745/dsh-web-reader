@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createJevClassifier } from "../src/vendor/shared/jev/runtime.ts";
 
-const { classifySystemOne } = await import(new URL("./api/system-one-shared.js", import.meta.resolve("@earendil-works/pi-ai")).href);
+const { classifyJev } = await import("../lib/web-reader.js");
 
 const { readinessInput, visualReadinessInput, waitForReadableContent, decision, judge } = await import(
   "../src/vendor/web-reader/readiness.ts"
@@ -59,28 +59,23 @@ test("readiness requests are atomic Noul questions with complete instructions", 
   for (const input of [readinessInput("https://example.com", sample), visualReadinessInput("https://example.com", sample)]) {
     assert.deepEqual(Object.keys(input.questions).sort(), [...QUESTION_IDS].sort());
     for (const question of Object.values(input.questions)) {
-      assert.equal(question.type, "bool", "the SDK maps public bool to wire noul");
+      assert.equal(question.type, "bool", "the transport maps public bool to wire noul");
       assert.ok(question.instructions.length > 40, "the question id is never sent, so the instructions must stand alone");
     }
   }
 });
 
-test("readiness passes real SDK bool-to-noul transport mapping and shared runtime validation", async () => {
+test("readiness passes TypeSafe bool-to-noul transport mapping and shared runtime validation", async () => {
   const model = { api: "typesafe", provider: "typesafe", id: "jev-latest", input: ["text"] };
-  const transport = {
-    api: model.api,
-    label: "readiness SDK regression",
-    url: () => "https://classifier.invalid/test",
-    payload: (_model, request) => request,
-    output: body => body,
-  };
   let requests = 0;
   const jev = createJevClassifier({ modelRegistry: {
     findOfType: () => model,
-    classify: (selected, context, options) => classifySystemOne(transport, selected, context, {
+    classify: (selected, context, options) => classifyJev(selected, context, {
       ...options,
       apiKey: "local-test-only",
-      fetch: async (_url, init) => {
+      fetch: async (url, init) => {
+        assert.equal(url, "https://api.typesafe.ai/v1/systemone");
+        assert.equal(init.headers.Authorization, "Bearer local-test-only");
         requests++;
         const wire = JSON.parse(init.body);
         assert.deepEqual(Object.keys(wire.questions).sort(), [...QUESTION_IDS].sort());
@@ -99,6 +94,28 @@ test("readiness passes real SDK bool-to-noul transport mapping and shared runtim
   assert.equal(verdict.fallback, false, "a protocol mismatch must not be concealed by mechanical readiness");
   assert.equal(verdict.verdicts, 1);
   assert.equal(requests, 2);
+});
+
+test('TypeSafe sends a referenced PNG asset and preserves reported token usage', async () => {
+  const context = visualReadinessInput('https://example.com', sample);
+  context.images = [{ mimeType: 'image/png', data: 'fixture-base64' }];
+  const result = await classifyJev({ id: 'jev-latest' }, context, {
+    apiKey: 'fixture-key',
+    async fetch(_url, init) {
+      assert.equal(init.headers['TypeSafe-Danger-Zone-Images'], 'true');
+      const wire = JSON.parse(init.body);
+      assert.deepEqual(wire.state, ['<image-1>', context.state]);
+      assert.deepEqual(wire.assets, {
+        '<image-1>': { type: 'image', format: 'png', data_base64: 'fixture-base64' },
+      });
+      return Response.json({
+        answers: Object.fromEntries(QUESTION_IDS.map(id => [id, { type: 'noul', noul: 0.03 }])),
+        usage: { input_tokens: 35, output_tokens: 4 },
+      });
+    },
+  });
+  assert.equal(result.usage.totalTokens, 39);
+  assert.equal(result.answers.still_loading.probability, 0.03);
 });
 
 test("readiness requests carry list and video evidence and tell Jev to ignore consent overlays", () => {

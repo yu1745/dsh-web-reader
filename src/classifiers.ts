@@ -1,146 +1,70 @@
-import { createModels, createProvider } from "@earendil-works/pi-ai";
-import { typesafeProvider } from "@earendil-works/pi-ai/providers/typesafe";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
-import { settings } from "./state.js";
-import { providerAuth } from "./auth.js";
+import { credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials';
+import { settings } from './state.js';
 
-export function decisionsRequest(model: string, context: any) {
-  return {
-    model,
-    state: context.state,
-    questions: Object.fromEntries(
-      Object.entries(context.questions).map(([id, q]: any) => [
-        id,
-        { ...q, type: q.type === "bool" ? "noul" : q.type },
-      ]),
-    ),
-    ...(context.images?.length ? { images: context.images } : {}),
+const endpoint = 'https://api.typesafe.ai/v1/systemone';
+
+async function apiKey(ctx: any) {
+  const record = await ctx.credentials.readRecord(credentialKey('llm-pi-ai', 'typesafe'));
+  if (record?.kind === 'api-key' && record.key) return record.key;
+  return (await ctx.credentials.resolve(credentialRef('TYPESAFE_API_KEY')))?.value
+    || process.env.TYPESAFE_API_KEY;
+}
+
+export async function classifyJev(model: { id: string }, request: any, options: {
+  apiKey?: string;
+  signal?: AbortSignal;
+  fetch?: typeof fetch;
+}) {
+  if (!options.apiKey) throw new Error('TypeSafe API key is unavailable');
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${options.apiKey}`,
+    'Content-Type': 'application/json',
   };
-}
-export function decisionsAnswers(body: any, context: any) {
-  const answers: any = {};
-  for (const [id, q] of Object.entries(context.questions) as any) {
-    const a = body.answers?.[id];
-    if (!a) throw new Error(`Missing decision: ${id}`);
-    answers[id] = q.type === "bool" ? { type: "bool", probability: a.noul } : a;
-  }
-  return answers;
-}
-export async function openrouterClassify(
-  model: any,
-  context: any,
-  options: any = {},
-) {
-  const result: any = {
-    api: model.api,
-    provider: model.provider,
+  const payload: Record<string, unknown> = {
     model: model.id,
-    answers: {},
-    stopReason: "stop",
-    timestamp: Date.now(),
+    state: request.state,
+    questions: Object.fromEntries(Object.entries(request.questions).map(([id, question]: [string, any]) => {
+      if (question.type !== 'bool') throw new Error(`Unsupported Jev question: ${id}`);
+      return [id, { ...question, type: 'noul' }];
+    })),
   };
-  try {
-    const response = await fetch("https://openrouter.ai/api/alpha/decisions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${options.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(decisionsRequest(model.id, context)),
-      signal: options.signal,
-    });
-    if (!response.ok)
-      throw new Error(`OpenRouter Decisions HTTP ${response.status}`);
-    const body: any = await response.json();
-    if (body.usage) {
-      const input = body.usage.prompt_tokens ?? body.usage.input_tokens ?? 0;
-      const output =
-        body.usage.completion_tokens ?? body.usage.output_tokens ?? 0;
-      const total = body.usage.cost;
-      result.usage = {
-        input,
-        output,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: input + output,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: typeof total === "number" ? total : 0,
-        },
-        ...(typeof total !== "number" ? { costUnknown: true } : {}),
-      };
-    }
-    result.answers = decisionsAnswers(body, context);
-  } catch (e: any) {
-    result.stopReason = options.signal?.aborted ? "aborted" : "error";
-    result.errorMessage = e.message;
+  if (request.images?.length) {
+    const assets = Object.fromEntries(request.images.map((image: any, index: number) => {
+      if (!['image/png', 'image/jpeg'].includes(image.mimeType)) throw new Error('Jev accepts PNG and JPEG images');
+      return [`<image-${index + 1}>`, { type: 'image', format: image.mimeType.slice(6), data_base64: image.data }];
+    }));
+    headers['TypeSafe-Danger-Zone-Images'] = 'true';
+    payload.assets = assets;
+    payload.state = [...Object.keys(assets), request.state];
   }
-  return result;
-}
-export function createClassifierRegistry(ctx: any, config: any = {}) {
-  config = { ...settings().classifier, ...config };
-  const provider = config?.provider ?? "typesafe";
-  const modelId =
-    config?.model ??
-    (provider === "openrouter"
-      ? "~typesafe/jev-latest"
-      : provider === "openai"
-        ? "gpt-6-luna"
-        : "jev-latest");
-  const models = createModels({
-    credentials: {
-      read: async (id: string) => {
-        const a = await providerAuth(ctx, id);
-        return a?.auth?.apiKey
-          ? { type: "api_key", key: a.auth.apiKey }
-          : undefined;
-      },
-      list: async () => [],
-      modify: async () => {
-        throw new Error("Classifier auth is read-only");
-      },
-      delete: async () => {},
-    },
+  const response = await (options.fetch ?? fetch)(endpoint, {
+    method: 'POST', headers, body: JSON.stringify(payload), signal: options.signal,
   });
-  models.setProvider(typesafeProvider());
-  models.setProvider(openaiProvider());
-  const routerModel: any = {
-    id: modelId,
-    name: modelId,
-    provider: "openrouter",
-    type: "classifier",
-    api: "openrouter-decisions",
-    baseUrl: "https://openrouter.ai/api/alpha",
-    input: ["text", "image"],
-    contextWindow: 1000000,
-    cost: { input: 0, output: 0 },
-  };
-  models.setProvider(
-    createProvider({
-      id: "openrouter",
-      auth: {
-        apiKey: {
-          name: "OpenRouter API key",
-          resolve: async ({ credential }: any) =>
-            credential?.key ? { auth: { apiKey: credential.key } } : undefined,
-        },
-      },
-      models: [routerModel],
-      classifiers: { "openrouter-decisions": { classify: openrouterClassify } },
-    } as any),
-  );
+  if (!response.ok) throw new Error(`TypeSafe System One returned HTTP ${response.status}`);
+  const body = await response.json();
+  const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+  const input = count(body.usage?.input_tokens);
+  const output = count(body.usage?.output_tokens);
+  const usage = body.usage?.input_tokens !== undefined || body.usage?.output_tokens !== undefined
+    ? { input, output, totalTokens: input + output, cacheRead: 0, cacheWrite: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+    : undefined;
+  const answers = Object.fromEntries(Object.keys(request.questions).map(id => {
+    const answer = body.answers?.[id];
+    return [id, answer?.type === 'noul' ? { type: 'bool', probability: answer.noul } : undefined];
+  }));
+  return { answers, usage, stopReason: 'stop' as const };
+}
+
+export function createClassifierRegistry(ctx: any, config: any = {}) {
+  const legacy = settings().classifier;
+  const model = { id: config.model || (legacy?.provider === 'typesafe' ? legacy.model : undefined) || 'jev-latest' };
   return {
-    findOfType: () => models.getModelOfType("classifier", provider, modelId),
-    classify: async (model: any, request: any, options: any) => {
-      const result = await models.classify(model, request, options);
-      ctx.emit("yu-extensions/tool-usage", {
-        sessionId: config.sessionId,
-        provider: model.provider,
-        model: model.id,
-        usage: result.usage,
+    findOfType: (type: string, provider: string) => type === 'classifier' && provider === 'typesafe' ? model : undefined,
+    async classify(selected: typeof model, request: any, options: { signal?: AbortSignal }) {
+      const result = await classifyJev(selected, request, { ...options, apiKey: await apiKey(ctx) });
+      if (result.usage) ctx.emit('yu-extensions/tool-usage', {
+        sessionId: config.sessionId, provider: 'typesafe', model: selected.id, usage: result.usage,
       });
       return result;
     },

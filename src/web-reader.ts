@@ -8,7 +8,6 @@ export const inject = ["tools", "systemPrompt", "credentials"];
 export const Config = z.object({
   classifier: z
     .object({
-      provider: z.string(),
       model: z.string(),
     })
     .default({}),
@@ -18,3 +17,5 @@ export function apply(ctx: any, config: any) {
   ctx.on("dispose", () => bridge.dispose());
   register(bridge as any);
 }
+
+export { classifyJev } from "./classifiers.js";

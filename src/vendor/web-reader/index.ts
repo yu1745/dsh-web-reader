@@ -25,7 +25,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
+const StringEnum = <T extends string>(values: readonly T[]) => Type.Unsafe<T>({ type: "string", enum: [...values] });
 import { mkdir, writeFile } from "node:fs/promises";
 import { accessSync, readdirSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
