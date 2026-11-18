@@ -1,0 +1,30 @@
+{
+  "name": "@yu1745/dsh-web-reader",
+  "version": "1.0.0",
+  "description": "Render and read JavaScript-heavy web pages in DeepSeek Harness",
+  "author": "yu1745",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22", "dsh": "^0.2.2-rc.3" },
+  "exports": {
+    ".": "./lib/web-reader.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": ["lib", "locale", "icon.svg", "cordis.patch.yml", "NOTICE.md"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-credentials": "^0.2.2-rc.3",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@earendil-works/pi-ai": "1.5.0",
+    "playwright": "1.61.0",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

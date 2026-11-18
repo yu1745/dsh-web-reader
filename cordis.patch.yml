@@ -1,0 +1,4 @@
+- insert:
+    - id: yu-standalone-web-reader
+      name: '@yu1745/dsh-web-reader'
+      config: {}
