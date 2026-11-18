@@ -4,10 +4,11 @@ import { settings } from './state.js';
 const endpoint = 'https://api.typesafe.ai/v1/systemone';
 
 async function apiKey(ctx: any) {
+  const configured = await ctx.credentials.resolve(credentialRef('TYPESAFE_API_KEY'));
+  if (configured?.value) return configured.value;
   const record = await ctx.credentials.readRecord(credentialKey('llm-pi-ai', 'typesafe'));
   if (record?.kind === 'api-key' && record.key) return record.key;
-  return (await ctx.credentials.resolve(credentialRef('TYPESAFE_API_KEY')))?.value
-    || process.env.TYPESAFE_API_KEY;
+  return process.env.TYPESAFE_API_KEY;
 }
 
 export async function classifyJev(model: { id: string }, request: any, options: {

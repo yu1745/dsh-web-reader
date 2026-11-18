@@ -1,19 +1,40 @@
 {
   "name": "@yu1745/dsh-web-reader",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Render and read JavaScript-heavy web pages in DeepSeek Harness",
   "author": "yu1745",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=22", "dsh": "^0.2.2-rc.3" },
+  "engines": {
+    "node": ">=22",
+    "dsh": "^0.2.2-rc.3"
+  },
   "exports": {
     ".": "./lib/web-reader.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": ["lib", "locale", "icon.svg", "cordis.patch.yml", "NOTICE.md"],
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "files": [
+    "lib",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "NOTICE.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-settings-models"
+      ]
+    }
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.mjs",
@@ -25,5 +46,7 @@
     "playwright": "1.61.0",
     "typebox": "1.1.38"
   },
-  "devDependencies": { "esbuild": "0.28.2" }
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
 }
