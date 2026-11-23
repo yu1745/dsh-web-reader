@@ -1,6 +1,6 @@
 {
   "name": "@yu1745/dsh-web-reader",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Render and read JavaScript-heavy web pages in DeepSeek Harness",
   "author": "yu1745",
   "license": "MIT",

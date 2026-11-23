@@ -78,9 +78,15 @@ that Jev accepts (max side 1536) while preserving desktop layouts; 1024-wide
 dropped most of MDN's ARIA tree, and 720-wide triggered mobile loading pages on
 Douban/Bilibili.
 Decisions are rechecked against the current DOM before use.
-The eight-second wait budget includes decision failures, with at most six text
-calls plus up to four visual calls; unavailable decisions degrade to conservative
-mechanical checks.
+The eight-second wait budget allows at most eight combined asks, throttled to one
+per 700 ms. Two consecutive transport failures abandon Jev for the page; a rejected
+screenshot switches that page to text-only asks. When Jev is unavailable, unparseable,
+or merely undecided (the 0.3–0.7 middle band), strong DOM evidence converges the page
+instead of burning the budget — stable substantive content, or a large loaded video
+player after one stable sample — unless Jev explicitly opposes it (content clearly
+absent or still loading). The stability signature normalizes digits away, so player
+timecodes and view/online counters churning every second cannot reset it; without
+that, video pages (YouTube, Bilibili) measurably ran the full budget.
 
 The reader may click one explicit reject-all/necessary-cookies-only control inside
 a recognized cookie panel. It does not confirm an age, change content preferences

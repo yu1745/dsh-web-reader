@@ -258,6 +258,76 @@ test("loaded video content does not require a long text transcript in mechanical
   assert.equal(verdict.pageKind, "content");
 });
 
+test("a video page converges through the loaded player while timecodes and counters churn", async () => {
+  let tick = 0;
+  const page = makePage({ current: () => ({ ...sample, contentEvidence: false, listEvidence: false, mediaEvidence: true, pendingContent: false, text: `0:0${tick % 10} / 3:33 在线 ${1000 + tick++}`, textLength: 800 }) });
+  const verdict = await run(page, undefined);
+  assert.equal(verdict.pageKind, "content");
+  assert.ok(page.now() < 3000, `video pages must not burn the wait budget (took ${page.now()}ms)`);
+});
+
+test("an indecisive Jev no longer starves a mechanically ready video page", async () => {
+  let tick = 0;
+  const page = makePage({ current: () => ({ ...sample, contentEvidence: false, listEvidence: false, mediaEvidence: true, pendingContent: false, text: `0:0${tick++ % 10} / 3:33`, textLength: 800 }) });
+  const verdict = await run(page, { async evaluate() { return answers({ main_content_present: 0.5, still_loading: 0.5 }); } });
+  assert.equal(verdict.pageKind, "content");
+  assert.equal(verdict.fallback, true, "the decision came from DOM evidence, not Jev");
+  assert.ok(page.now() < 4000, `took ${page.now()}ms`);
+});
+
+test("an indecisive Jev no longer starves a stable article", async () => {
+  const page = makePage();
+  const verdict = await run(page, { async evaluate() { return answers({ main_content_present: 0.5, still_loading: 0.5 }); } });
+  assert.equal(verdict.pageKind, "content");
+  assert.equal(verdict.jevScore, 0.5);
+  assert.equal(verdict.fallback, true);
+  assert.ok(page.now() < 2000, `took ${page.now()}ms`);
+});
+
+test("a strongly opposed Jev still outranks DOM readiness evidence", async () => {
+  const page = makePage();
+  const verdict = await run(page, { async evaluate() { return answers({ main_content_present: 0.05, still_loading: 0.95 }); } });
+  assert.equal(verdict.incomplete, true);
+  assert.equal(page.now(), 8000);
+});
+
+test("an image request that fails in transit is re-asked without the image instead of dropping Jev", async () => {
+  const page = makePage();
+  const requests = [];
+  const jev = { async evaluate(request) { requests.push(request); if (request.images?.length) throw new Error("does not support image input"); return answers(READY); } };
+  const verdict = await run(page, jev);
+  assert.equal(verdict.pageKind, "content");
+  assert.equal(verdict.fallback, false);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].images?.length, 1, "the screenshot is tried first");
+  assert.equal(requests[1].images, undefined, "the same questions are re-asked as text only");
+  assert.deepEqual(Object.keys(requests[1].questions).sort(), [...QUESTION_IDS].sort());
+  assert.match(requests[1].questions.main_content_present.instructions, /Using `page_text`:/);
+  assert.equal(verdict.visualVerdicts, 1, "the image attempt is still counted");
+  assert.equal(verdict.visualScore, undefined, "but the decision came from the text re-ask");
+  assert.equal(page.calls.scans, 0);
+});
+
+test("a single transient transport failure does not abandon Jev for the rest of the page", async () => {
+  const page = makePage({ current: weak });
+  const requests = [];
+  let failures = 0;
+  const jev = {
+    async evaluate(request) {
+      requests.push(request);
+      if (failures++ === 0) throw new Error("transient congestion");
+      return answers(READY);
+    },
+  };
+  const verdict = await run(page, jev);
+  assert.equal(verdict.pageKind, "content");
+  assert.equal(verdict.fallback, false, "one failed ask must not flip the page to mechanical rules");
+  assert.equal(verdict.jevScore, 0.97);
+  assert.equal(requests[0].images?.length, 1);
+  assert.equal(requests[1].images, undefined, "screenshots stop after the transport rejected one");
+  assert.deepEqual(Object.keys(requests[1].questions).sort(), [...QUESTION_IDS].sort());
+});
+
 test("the mechanical fallback is used without Jev", async () => {
   const page = makePage({ screenshot: false });
   const verdict = await run(page, undefined);

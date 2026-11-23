@@ -135,12 +135,12 @@ export function judge(d: Decision): 'ready' | { blocked: Exclude<PageKind, 'cont
 }
 
 /** 截图 + 摘要合成一个请求；截图失败时退回仅文本。失败不抛出，返回 undefined 由上层降级。 */
-async function ask(page: ReadinessPage, url: string, sample: PageSample, jev: JevClassifier, signal: AbortSignal | undefined, remaining: number, useImage: boolean) {
+async function ask(page: ReadinessPage, url: string, sample: PageSample, jev: JevClassifier, signal: AbortSignal | undefined, remaining: () => number, useImage: boolean) {
   let request = readinessInput(url, sample);
   let withImage = false;
   if (useImage && page.screenshot) {
     try {
-      const image = await page.screenshot({ type: 'png', timeout: Math.max(300, Math.min(4000, remaining - 500)) });
+      const image = await page.screenshot({ type: 'png', timeout: Math.max(300, Math.min(4000, remaining() - 500)) });
       if (image && image.byteLength >= 1000) {
         request = visualReadinessInput(url, sample);
         request.images = [{ type: 'image', data: Buffer.from(image).toString('base64'), mimeType: 'image/png' }];
@@ -148,14 +148,25 @@ async function ask(page: ReadinessPage, url: string, sample: PageSample, jev: Je
       }
     } catch { /* 退回仅文本 */ }
   }
-  const timeoutMs = Math.max(600, Math.min(2500, remaining - 250));
-  const budget = AbortSignal.timeout(timeoutMs);
-  try {
-    return { decision: decision(await jev.evaluate(request, { timeoutMs, signal: signal ? AbortSignal.any([signal, budget]) : budget })), withImage };
-  } catch {
-    signal?.throwIfAborted();
-    return { decision: undefined, withImage };
+  // `failed` 是传输层失败（抛出）；`decision: undefined` 是回答无法解析，两者由调用方区别对待。
+  const evaluate = async (input: ClassifierContext): Promise<{ decision?: Decision; failed?: true }> => {
+    const timeoutMs = Math.max(600, Math.min(2500, remaining() - 250));
+    const budget = AbortSignal.timeout(timeoutMs);
+    try {
+      return { decision: decision(await jev.evaluate(input, { timeoutMs, signal: signal ? AbortSignal.any([signal, budget]) : budget })) };
+    } catch {
+      signal?.throwIfAborted();
+      return { failed: true };
+    }
+  };
+  const reply = await evaluate(request);
+  // 带截图的请求在传输层失败时（例如 Pi 1.1–1.3 的 Jev 模型只收文本，或上传被挤过超时），同一组问题
+  // 去掉截图再问一次，不让整页降级为机械规则；回答无法解析则保持原结果。视觉计数按“尝试过截图”计，与传输成败无关。
+  if (reply.failed && withImage) {
+    const retry = await evaluate(readinessInput(url, sample));
+    return { decision: retry.decision, attempted: true, decidedWithImage: false, imageRejected: true, failedTransport: !!retry.failed };
   }
+  return { decision: reply.decision, attempted: withImage, decidedWithImage: withImage && !reply.failed, imageRejected: false, failedTransport: !!reply.failed };
 }
 
 /** 8 秒总预算，最多 8 次请求（每次都是截图+文本合一的单个请求）；失败不会追加另一轮 8 秒。 */
@@ -175,12 +186,18 @@ export async function waitForReadableContent(page: ReadinessPage, url: string, j
   let mainBeforeClear: number | undefined;
   let last: Decision | undefined;
   let lastWithImage = false;
+  // 传输层失败（抛出）与回答无法解析不同：后者是模型/协议问题，不会自愈；前者可能只是瞬时拥塞，
+  // 累计两次才放弃 Jev，期间继续按节奏重问。
+  let transportFailures = 0;
+  // 本次返回的结论是否出自 DOM 规则（而非 Jev）：fallback 语义是“没用到 Jev 的结论”，
+  // 不只覆盖 Jev 不可用的情形，也覆盖 Jev 未决时由强 DOM 证据提前收敛的情形。
+  let domDecided = false;
   let sample: PageSample | undefined;
   let sampled = false;
   let samplingError: unknown;
   const result = (blocked?: LoadVerdict['blocked'], complete = false): LoadVerdict => ({
     pageKind: blocked || (complete ? 'content' : undefined), blocked, incomplete: !blocked && !complete,
-    jevScore: last?.main, visualScore: lastWithImage ? last?.main : undefined, fallback: mechanical, verdicts, visualVerdicts, ...overlayCleared > 0 ? { overlayCleared } : {},
+    jevScore: last?.main, visualScore: lastWithImage ? last?.main : undefined, fallback: mechanical || domDecided, verdicts, visualVerdicts, ...overlayCleared > 0 ? { overlayCleared } : {},
   });
   while (now() < deadline) {
     signal?.throwIfAborted();
@@ -189,7 +206,9 @@ export async function waitForReadableContent(page: ReadinessPage, url: string, j
     sample = await page.evaluate<PageSample>(SAMPLE_SCRIPT).catch(error => { samplingError = error; debug('sampling failed', error); return undefined; });
     if (sample) {
       sampled = true;
-      const signature = JSON.stringify(sample);
+      // 播放器时间码、观看数、在线人数等每秒都在变；这些数字爆动不代表内容在变，
+      // 签名对数字归一，否则 stable 永远清零，还会把已拿到的 Jev 结论反复作废。
+      const signature = JSON.stringify({ ...sample, text: sample.text.replace(/\d/g, 'N') });
       stable = signature === previous ? stable + 1 : 0;
       if (signature !== previous) last = undefined;
       previous = signature;
@@ -200,12 +219,16 @@ export async function waitForReadableContent(page: ReadinessPage, url: string, j
       if (!mechanical && verdicts < MAX_ASKS && due && deadline - now() > 800) {
         verdicts++;
         askedTime = now();
-        const reply = await ask(page, url, sample, jev!, signal, deadline - now(), imageFailures < 2);
-        if (reply.withImage) visualVerdicts++; else if (imageFailures < 2) imageFailures++;
+        const reply = await ask(page, url, sample, jev!, signal, () => deadline - now(), imageFailures < 2);
+        if (reply.attempted) visualVerdicts++; else if (imageFailures < 2) imageFailures++;
+        // 截图被传输层拒收过一次，说明这条链路带不动这个体积；本页后续询问改纯文本，不再每次白烧 2.5 秒。
+        if (reply.imageRejected) imageFailures = 2;
         last = reply.decision;
-        lastWithImage = reply.withImage;
-        debug('ask', { stable, withImage: reply.withImage, decision: reply.decision, remaining: deadline - now() });
-        if (!reply.decision) { mechanical = true; }
+        lastWithImage = reply.decidedWithImage;
+        debug('ask', { stable, withImage: reply.attempted, decision: reply.decision, remaining: deadline - now() });
+        if (!reply.decision) {
+          if (!reply.failedTransport || ++transportFailures >= 2) mechanical = true;
+        }
         else {
           // 清除弹窗后的第一次回答：内容概率反而明显下降，说明隐藏误伤了内容，还原且不再尝试。
           if (mainBeforeClear !== undefined) {
@@ -230,8 +253,24 @@ export async function waitForReadableContent(page: ReadinessPage, url: string, j
         }
       }
       const restriction = sample.restrictionEvidence || (gate && (!sample.contentEvidence || sample.textLength < 200) ? gate.kind : undefined);
-      if (mechanical && restriction && !sample.pendingContent && stable >= 1) return result(restriction);
-      if (mechanical && !restriction && (sample.contentEvidence || sample.mediaEvidence || sample.listEvidence) && !sample.pendingContent && stable >= 2) return result(undefined, true);
+      // 强 DOM 证据不因 Jev 未决而空转预算：Jev 不可用、尚未问出结果、或正处在中带时，
+      // 由 DOM 规则收敛；只有 Jev 明确给出相反结论（内容确不在/确在加载/确有阻碍）时才继续听 Jev 的。
+      // 视频页实测：YouTube 采样 3 秒即稳定，bilibili 文本因弹幕/计数持续追加而永远到不了 stable>=2，
+      // 但已加载的大播放器本身就是主内容（mediaEvidence），stable>=1 即可收敛。
+      const jevOpposes = !!last && last.main <= NO && (last.loading >= YES || last.blockedP >= YES);
+      const yieldsToDom = mechanical || !last || !jevOpposes;
+      if (restriction && !sample.pendingContent && stable >= 1 && (mechanical || !last || last.main < YES)) {
+        domDecided = true;
+        return result(restriction);
+      }
+      if (!restriction && sample.mediaEvidence && stable >= 1 && yieldsToDom) {
+        domDecided = true;
+        return result(undefined, true);
+      }
+      if (!restriction && !sample.pendingContent && (sample.contentEvidence || sample.listEvidence) && stable >= 2 && yieldsToDom) {
+        domDecided = true;
+        return result(undefined, true);
+      }
     }
     await page.waitForTimeout(Math.min(350, Math.max(0, deadline - now()))).catch(() => {});
   }
